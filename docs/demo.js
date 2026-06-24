@@ -11,6 +11,8 @@
     '  <ellipse cx="100" cy="150" rx="52" ry="26" />',
     '  <polygon points="20,118 64,118 42,172" />',
     '  <path d="M118 96 C 142 74, 184 80, 192 120 S 158 184, 116 162 Z" />',
+    '  <!-- open path (no Z): a LINESTRING by default, a POLYGON with closePaths=always -->',
+    '  <path d="M16 96 q 16 -22 32 0 t 32 0" fill="none" stroke="black" />',
     '  <line x1="8" y1="192" x2="192" y2="192" />',
     '</svg>',
   ].join('\n');
@@ -32,6 +34,7 @@
       applyViewBox: $('applyViewBox').checked,
       density: parseFloat($('density').value) || 0,
       precision: Math.max(0, parseInt($('precision').value, 10) || 0),
+      closePaths: $('closePaths').value === 'always' ? 'always' : 'auto',
     };
   }
 
@@ -326,7 +329,7 @@
   $('resetViewBtn').addEventListener('click', resetView);
 
   // --- wiring -------------------------------------------------------------
-  ['flipY', 'applyViewBox', 'density', 'precision'].forEach(function (id) {
+  ['flipY', 'applyViewBox', 'density', 'precision', 'closePaths'].forEach(function (id) {
     $(id).addEventListener('input', update);
     $(id).addEventListener('change', update);
   });

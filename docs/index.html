@@ -74,13 +74,17 @@
         color: var(--muted);
         white-space: nowrap;
       }
-      .toolbar input[type='number'] {
+      .toolbar input[type='number'],
+      .toolbar select {
         width: 64px;
         background: var(--panel-2);
         color: var(--text);
         border: 1px solid var(--border);
         border-radius: 6px;
         padding: 4px 6px;
+      }
+      .toolbar select {
+        width: auto;
       }
       .toolbar .spacer {
         flex: 1;
@@ -265,6 +269,13 @@
           >precision
           <input type="number" id="precision" value="3" min="0" step="1"
         /></label>
+        <label title="How to treat path subpaths not closed with Z"
+          >closePaths
+          <select id="closePaths">
+            <option value="auto">auto</option>
+            <option value="always">always</option>
+          </select></label
+        >
         <label
           ><input type="checkbox" id="showPoints" checked /> show sampled
           points</label
