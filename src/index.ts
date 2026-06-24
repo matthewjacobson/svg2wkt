@@ -46,6 +46,19 @@ export interface Svg2WktOptions {
    * intrinsic size. Setting this enables {@link Svg2WktOptions.applyViewBox}.
    */
   viewport?: { width: number; height: number };
+  /**
+   * How to treat `<path>` subpaths that are not explicitly closed with `Z`/`z`.
+   *
+   * - `'auto'` (default): a subpath closed with `Z` becomes a polygon ring,
+   *   while an open subpath becomes a `LINESTRING`. A path that mixes the two
+   *   yields a `GEOMETRYCOLLECTION`, and several open subpaths a
+   *   `MULTILINESTRING`.
+   * - `'always'`: every subpath is closed into a polygon ring (matching the
+   *   original `svg-to-wkt`), so a path is always emitted as a `POLYGON`.
+   *
+   * Only affects `<path>` elements; `<polyline>`/`<polygon>` are unaffected.
+   */
+  closePaths?: 'auto' | 'always';
 }
 
 interface ResolvedOptions {
@@ -54,6 +67,7 @@ interface ResolvedOptions {
   flipY: boolean;
   applyViewBox: boolean;
   viewport: { width: number; height: number } | null;
+  closePaths: 'auto' | 'always';
 }
 
 const DEFAULTS: ResolvedOptions = {
@@ -62,6 +76,7 @@ const DEFAULTS: ResolvedOptions = {
   flipY: true,
   applyViewBox: false,
   viewport: null,
+  closePaths: 'auto',
 };
 
 /** A 2D point. */
@@ -427,6 +442,11 @@ function ring(points: Pt[], fmt: Formatter): string {
   return `(${coords.join(',')})`;
 }
 
+/** Format a list of points as a parenthesized coordinate list (open, no close). */
+function coordList(points: Pt[], fmt: Formatter): string {
+  return `(${points.map((p) => fmt(p[0], p[1])).join(',')})`;
+}
+
 // ---------------------------------------------------------------------------
 // Curve sampling
 // ---------------------------------------------------------------------------
@@ -706,9 +726,15 @@ function readSegments(d: string): Segment[] {
   return segs;
 }
 
-/** Flatten a path `d` attribute into a list of subpaths (each a point list). */
-function samplePath(d: string, density: number): Pt[][] {
-  const subpaths: Pt[][] = [];
+/** A flattened path subpath: its sampled points and whether `Z`/`z` closed it. */
+interface SubPath {
+  points: Pt[];
+  closed: boolean;
+}
+
+/** Flatten a path `d` attribute into a list of subpaths. */
+function samplePath(d: string, density: number): SubPath[] {
+  const subpaths: SubPath[] = [];
   let current: Pt[] | null = null;
   let cx = 0;
   let cy = 0;
@@ -727,6 +753,12 @@ function samplePath(d: string, density: number): Pt[][] {
     return current;
   };
 
+  // Finalize the in-progress subpath (subpaths of a single point are dropped).
+  const flush = (closed: boolean): void => {
+    if (current && current.length > 1) subpaths.push({ points: current, closed });
+    current = null;
+  };
+
   for (const { cmd, params } of readSegments(d)) {
     const rel = cmd >= 'a';
     const C = cmd.toUpperCase();
@@ -738,7 +770,7 @@ function samplePath(d: string, density: number): Pt[][] {
           x += cx;
           y += cy;
         }
-        if (current && current.length > 1) subpaths.push(current);
+        flush(false);
         current = [[x, y]];
         cx = x;
         cy = y;
@@ -871,12 +903,15 @@ function samplePath(d: string, density: number): Pt[][] {
         ensure().push([startX, startY]);
         cx = startX;
         cy = startY;
+        // A drawing command after `Z` (without an `M`) starts a fresh subpath
+        // at the current point, per the SVG path spec.
+        flush(true);
         break;
       }
     }
     prevCmd = C;
   }
-  if (current && current.length > 1) subpaths.push(current);
+  flush(false);
   return subpaths;
 }
 
@@ -914,11 +949,46 @@ function ellipsePoints(
   return pts;
 }
 
+/**
+ * Convert a path `d` string into a list of WKT geometries, honoring
+ * `closePaths`. In `'auto'` mode, `Z`-closed subpaths form a `POLYGON` (first
+ * ring exterior, the rest holes) and open subpaths become a `LINESTRING` (or
+ * `MULTILINESTRING` if there are several); a path with both yields both. In
+ * `'always'` mode, every subpath is a polygon ring and a single `POLYGON` is
+ * returned.
+ */
+function pathGeometries(d: string, opts: ResolvedOptions, fmt: Formatter): string[] {
+  const subpaths = samplePath(d, opts.density);
+  if (subpaths.length === 0) return [];
+
+  if (opts.closePaths === 'always') {
+    const rings = subpaths.map((sp) => ring(sp.points, fmt)).filter((r) => r);
+    return rings.length ? [`POLYGON(${rings.join(',')})`] : [];
+  }
+
+  const rings: string[] = [];
+  const lines: string[] = [];
+  for (const sp of subpaths) {
+    if (sp.closed) {
+      const r = ring(sp.points, fmt);
+      if (r) rings.push(r);
+    } else {
+      lines.push(coordList(sp.points, fmt));
+    }
+  }
+
+  const out: string[] = [];
+  if (rings.length) out.push(`POLYGON(${rings.join(',')})`);
+  if (lines.length === 1) out.push(`LINESTRING${lines[0]}`);
+  else if (lines.length > 1) out.push(`MULTILINESTRING(${lines.join(',')})`);
+  return out;
+}
+
 function convertElement(
   tag: Tag,
   opts: ResolvedOptions,
   fmt: Formatter,
-): string | null {
+): string[] {
   const { name, attrs } = tag;
   switch (name) {
     case 'line': {
@@ -926,42 +996,42 @@ function convertElement(
       const y1 = num(attrs, 'y1');
       const x2 = num(attrs, 'x2');
       const y2 = num(attrs, 'y2');
-      return `LINESTRING(${fmt(x1, y1)},${fmt(x2, y2)})`;
+      return [`LINESTRING(${fmt(x1, y1)},${fmt(x2, y2)})`];
     }
     case 'polyline': {
       const pts = toPairs(parseNumbers(attrs.points ?? ''));
-      if (pts.length < 2) return null;
-      return `LINESTRING(${pts.map((p) => fmt(p[0], p[1])).join(',')})`;
+      if (pts.length < 2) return [];
+      return [`LINESTRING(${pts.map((p) => fmt(p[0], p[1])).join(',')})`];
     }
     case 'polygon': {
       const pts = toPairs(parseNumbers(attrs.points ?? ''));
-      if (pts.length < 3) return null;
-      return `POLYGON(${ring(pts, fmt)})`;
+      if (pts.length < 3) return [];
+      return [`POLYGON(${ring(pts, fmt)})`];
     }
     case 'rect': {
       const x = num(attrs, 'x');
       const y = num(attrs, 'y');
       const w = num(attrs, 'width');
       const h = num(attrs, 'height');
-      if (w <= 0 || h <= 0) return null;
+      if (w <= 0 || h <= 0) return [];
       const pts: Pt[] = [
         [x, y],
         [x + w, y],
         [x + w, y + h],
         [x, y + h],
       ];
-      return `POLYGON(${ring(pts, fmt)})`;
+      return [`POLYGON(${ring(pts, fmt)})`];
     }
     case 'circle': {
       const r = num(attrs, 'r');
-      if (r <= 0) return null;
+      if (r <= 0) return [];
       const pts = circlePoints(num(attrs, 'cx'), num(attrs, 'cy'), r, opts.density);
-      return `POLYGON(${ring(pts, fmt)})`;
+      return [`POLYGON(${ring(pts, fmt)})`];
     }
     case 'ellipse': {
       const rx = num(attrs, 'rx');
       const ry = num(attrs, 'ry');
-      if (rx <= 0 || ry <= 0) return null;
+      if (rx <= 0 || ry <= 0) return [];
       const pts = ellipsePoints(
         num(attrs, 'cx'),
         num(attrs, 'cy'),
@@ -969,17 +1039,12 @@ function convertElement(
         ry,
         opts.density,
       );
-      return `POLYGON(${ring(pts, fmt)})`;
+      return [`POLYGON(${ring(pts, fmt)})`];
     }
-    case 'path': {
-      const rings = samplePath(attrs.d ?? '', opts.density)
-        .map((sp) => ring(sp, fmt))
-        .filter((r) => r.length > 0);
-      if (rings.length === 0) return null;
-      return `POLYGON(${rings.join(',')})`;
-    }
+    case 'path':
+      return pathGeometries(attrs.d ?? '', opts, fmt);
     default:
-      return null;
+      return [];
   }
 }
 
@@ -1017,24 +1082,29 @@ export function svgToWkt(svg: string, options: Svg2WktOptions = {}): string {
             const p = applyMatrix(m, x, y);
             return baseFmt(p[0], p[1]);
           };
-    const wkt = convertElement(shape, opts, fmt);
-    if (wkt) geometries.push(wkt);
+    for (const wkt of convertElement(shape, opts, fmt)) geometries.push(wkt);
   }
   return `GEOMETRYCOLLECTION(${geometries.join(',')})`;
 }
 
 /**
- * Convert a single SVG path `d` string into a WKT `POLYGON`. Each subpath
- * becomes a ring (the first is the exterior, subsequent ones are treated as
- * holes). Returns an empty string if the path yields no geometry.
+ * Convert a single SVG path `d` string into WKT.
+ *
+ * With the default `closePaths: 'auto'`, a subpath closed with `Z`/`z` becomes a
+ * `POLYGON` ring (the first closed ring is the exterior, subsequent ones holes)
+ * and an open subpath becomes a `LINESTRING` (or `MULTILINESTRING`). A path that
+ * yields more than one top-level geometry is wrapped in a `GEOMETRYCOLLECTION`.
+ * With `closePaths: 'always'`, every subpath is closed into a ring and the
+ * result is always a single `POLYGON`. Returns an empty string if the path
+ * yields no geometry.
  */
 export function pathToWkt(d: string, options: Svg2WktOptions = {}): string {
   const opts: ResolvedOptions = { ...DEFAULTS, ...options };
   const fmt = makeFormatter(opts);
-  const rings = samplePath(d, opts.density)
-    .map((sp) => ring(sp, fmt))
-    .filter((r) => r.length > 0);
-  return rings.length === 0 ? '' : `POLYGON(${rings.join(',')})`;
+  const geoms = pathGeometries(d, opts, fmt);
+  if (geoms.length === 0) return '';
+  if (geoms.length === 1) return geoms[0];
+  return `GEOMETRYCOLLECTION(${geoms.join(',')})`;
 }
 
 export default svgToWkt;

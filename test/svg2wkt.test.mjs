@@ -74,30 +74,92 @@ test('compound path produces multiple rings (exterior + hole)', () => {
 });
 
 test('cubic bezier path samples interior points', () => {
+  // Open path (no Z) -> LINESTRING.
   const wkt = pathToWkt('M0 0 C0 10 10 10 10 0', { flipY: false, density: 1 });
-  const inner = wkt.slice('POLYGON(('.length, -2);
+  const inner = wkt.slice('LINESTRING('.length, -1);
   const pts = inner.split(',');
-  assert.ok(pts.length > 3, `expected sampled curve, got ${pts.length} points`);
+  assert.ok(pts.length > 2, `expected sampled curve, got ${pts.length} points`);
   assert.equal(pts[0], '0 0');
+  assert.equal(pts[pts.length - 1], '10 0');
 });
 
 test('quadratic bezier path samples interior points', () => {
   const wkt = pathToWkt('M0 0 Q5 10 10 0', { flipY: false, density: 1 });
-  assert.match(wkt, /^POLYGON\(\(0 0,/);
+  assert.match(wkt, /^LINESTRING\(0 0,/);
 });
 
 test('arc command is flattened to points', () => {
   const wkt = pathToWkt('M0 0 A5 5 0 0 1 10 0', { flipY: false, density: 1 });
-  const inner = wkt.slice('POLYGON(('.length, -2);
+  const inner = wkt.slice('LINESTRING('.length, -1);
   const pts = inner.split(',');
-  assert.ok(pts.length > 3, `expected flattened arc, got ${pts.length} points`);
+  assert.ok(pts.length > 2, `expected flattened arc, got ${pts.length} points`);
   // The arc endpoint should be reached.
-  assert.equal(pts[pts.length - 2], '10 0');
+  assert.equal(pts[pts.length - 1], '10 0');
 });
 
 test('implicit repeated lineto after moveto', () => {
   const wkt = pathToWkt('M0 0 10 0 10 10 Z', { flipY: false });
   assert.equal(wkt, 'POLYGON((0 0,10 0,10 10,0 0))');
+});
+
+test('open path (no Z) becomes a LINESTRING', () => {
+  const wkt = pathToWkt('M0 0 L10 0 L10 10', { flipY: false });
+  assert.equal(wkt, 'LINESTRING(0 0,10 0,10 10)');
+});
+
+test('closed path (Z) becomes a POLYGON', () => {
+  const wkt = pathToWkt('M0 0 L10 0 L10 10 Z', { flipY: false });
+  assert.equal(wkt, 'POLYGON((0 0,10 0,10 10,0 0))');
+});
+
+test('closePaths:"always" closes an open path into a POLYGON', () => {
+  const wkt = pathToWkt('M0 0 L10 0 L10 10', { flipY: false, closePaths: 'always' });
+  assert.equal(wkt, 'POLYGON((0 0,10 0,10 10,0 0))');
+});
+
+test('multiple open subpaths become a MULTILINESTRING', () => {
+  const wkt = pathToWkt('M0 0 L1 0 M2 2 L3 2', { flipY: false });
+  assert.equal(wkt, 'MULTILINESTRING((0 0,1 0),(2 2,3 2))');
+});
+
+test('multiple closed subpaths become one POLYGON with holes', () => {
+  const wkt = pathToWkt('M0 0 L10 0 L10 10 Z M2 2 L8 2 L8 8 Z', { flipY: false });
+  assert.equal(
+    wkt,
+    'POLYGON((0 0,10 0,10 10,0 0),(2 2,8 2,8 8,2 2))',
+  );
+});
+
+test('mixed open + closed subpaths yield a GEOMETRYCOLLECTION', () => {
+  const wkt = pathToWkt('M0 0 L10 0 L10 10 Z M20 20 L30 20', { flipY: false });
+  assert.equal(
+    wkt,
+    'GEOMETRYCOLLECTION(POLYGON((0 0,10 0,10 10,0 0)),LINESTRING(20 20,30 20))',
+  );
+});
+
+test('a drawing command after Z starts a new (open) subpath', () => {
+  // After Z the point returns to the subpath start (0,0); L then opens a new line.
+  const wkt = pathToWkt('M0 0 L10 0 L10 10 Z L5 5', { flipY: false });
+  assert.equal(
+    wkt,
+    'GEOMETRYCOLLECTION(POLYGON((0 0,10 0,10 10,0 0)),LINESTRING(0 0,5 5))',
+  );
+});
+
+test('open path inside svgToWkt is a LINESTRING member', () => {
+  const wkt = svgToWkt('<svg><path d="M0 0 L1 1"/></svg>', { flipY: false });
+  assert.equal(wkt, 'GEOMETRYCOLLECTION(LINESTRING(0 0,1 1))');
+});
+
+test('mixed path inside svgToWkt flattens into sibling members', () => {
+  const wkt = svgToWkt('<svg><path d="M0 0 L2 0 L2 2 Z M5 5 L6 5"/></svg>', {
+    flipY: false,
+  });
+  assert.equal(
+    wkt,
+    'GEOMETRYCOLLECTION(POLYGON((0 0,2 0,2 2,0 0)),LINESTRING(5 5,6 5))',
+  );
 });
 
 test('multiple elements emitted in document order', () => {
@@ -192,7 +254,7 @@ test('attribute values containing ">" do not break the scanner', () => {
 });
 
 test('precision option rounds coordinates', () => {
-  const wkt = pathToWkt('M0 0 L1.23456 0', { flipY: false, precision: 2 });
+  const wkt = pathToWkt('M0 0 L1.23456 0 Z', { flipY: false, precision: 2 });
   assert.equal(wkt, 'POLYGON((0 0,1.23 0,0 0))');
 });
 
@@ -208,7 +270,7 @@ test('degenerate shapes are skipped', () => {
 });
 
 test('scientific notation and sign-glued numbers parse correctly', () => {
-  const wkt = pathToWkt('M0 0L1e1 0L10-5', { flipY: false });
+  const wkt = pathToWkt('M0 0L1e1 0L10-5Z', { flipY: false });
   assert.equal(wkt, 'POLYGON((0 0,10 0,10 -5,0 0))');
 });
 

@@ -60,19 +60,28 @@ converted in document order; everything else is ignored.
 | `<rect>`    | `POLYGON`     |
 | `<circle>`  | `POLYGON` (approximated) |
 | `<ellipse>` | `POLYGON` (approximated) |
-| `<path>`    | `POLYGON` (curves sampled, subpaths become rings) |
+| `<path>`    | `POLYGON` / `LINESTRING` / `MULTILINESTRING` (curves sampled; see below) |
+
+A `<path>` maps each subpath by whether it is explicitly closed with `Z`/`z`:
+closed subpaths become polygon rings, open ones become linestrings. See
+[`closePaths`](#options) to override.
 
 ### `pathToWkt(d, options?) => string`
 
-Converts a single SVG path `d` attribute into a WKT `POLYGON`. Each subpath
-becomes a ring (the first is the exterior, subsequent ones are treated as
-holes). Returns `''` if the path produces no geometry.
+Converts a single SVG path `d` attribute into WKT. With the default
+`closePaths: 'auto'`, `Z`-closed subpaths form a `POLYGON` (first ring exterior,
+the rest holes) and open subpaths form a `LINESTRING` (or `MULTILINESTRING`); a
+path with both yields a `GEOMETRYCOLLECTION`. Returns `''` if the path produces
+no geometry.
 
 ```ts
 import { pathToWkt } from 'svg2wkt';
 
 pathToWkt('M0 0 H10 V10 H0 Z', { flipY: false });
-// 'POLYGON((0 0,10 0,10 10,0 10,0 0))'
+// 'POLYGON((0 0,10 0,10 10,0 10,0 0))'   // closed -> polygon
+
+pathToWkt('M0 0 H10 V10', { flipY: false });
+// 'LINESTRING(0 0,10 0,10 10)'           // open -> linestring
 ```
 
 ### Options
@@ -84,6 +93,7 @@ pathToWkt('M0 0 H10 V10 H0 Z', { flipY: false });
 | `density`      | `number`  | `1`     | Sampling density for curved geometry (circles, ellipses, path curves), in sample points per unit of length. Higher = smoother and more vertices. |
 | `applyViewBox` | `boolean` | `false` | Apply the `<svg>` `viewBox` → viewport mapping so output is in rendered/pixel space instead of raw content units (see below). |
 | `viewport`     | `{ width, height }` | — | Explicit viewport size (px) for the root `<svg>`, overriding its `width`/`height`. Setting this implies `applyViewBox: true`. |
+| `closePaths`   | `'auto' \| 'always'` | `'auto'` | How to treat `<path>` subpaths not closed with `Z`. `'auto'`: closed → polygon ring, open → linestring. `'always'`: every subpath is closed into a ring, so a path is always a `POLYGON`. |
 
 ## Path commands
 
@@ -142,9 +152,11 @@ svgToWkt(svg, { flipY: false, applyViewBox: true });
   as their four corners.
 - **`width`/`height` units:** only unitless and `px` values are resolved for the
   viewport; `%`, `em`, `in`, etc. fall back to the offset-only mapping above.
-- A `<path>` always becomes a `POLYGON` (closed). Compound paths map each
-  subpath to a ring, which models holes (e.g. the letter "O") well, but does not
-  attempt to split disjoint subpaths into a `MULTIPOLYGON`.
+- **Open vs. closed paths:** by default a subpath is a `POLYGON` ring only if it
+  ends in `Z`/`z`; otherwise it is a `LINESTRING`. Use `closePaths: 'always'` for
+  the original always-`POLYGON` behavior. Multiple closed rings model holes
+  (e.g. the letter "O") within a single `POLYGON`, but disjoint filled regions
+  are not split into a `MULTIPOLYGON`.
 - Degenerate shapes (zero radius/size, too few points) are skipped.
 
 ## Demo
