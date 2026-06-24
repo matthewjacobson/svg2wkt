@@ -1,5 +1,11 @@
 # svg2wkt
 
+[![npm version](https://img.shields.io/npm/v/svg2wkt.svg)](https://www.npmjs.com/package/svg2wkt)
+[![npm downloads](https://img.shields.io/npm/dm/svg2wkt.svg)](https://www.npmjs.com/package/svg2wkt)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/svg2wkt.svg)](https://bundlephobia.com/package/svg2wkt)
+[![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](https://www.npmjs.com/package/svg2wkt?activeTab=dependencies)
+[![license](https://img.shields.io/npm/l/svg2wkt.svg)](./LICENSE)
+
 Convert an SVG string into a [WKT](https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry)
 (Well-Known Text) geometry string.
 
