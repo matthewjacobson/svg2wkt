@@ -91,59 +91,77 @@
     return geoms;
   }
 
-  // --- WKT rendering (Y-up cartesian, auto-fit) ---------------------------
-  function renderWkt(geoms, showPoints) {
-    var ctx = canvas.getContext('2d');
-    var dpr = window.devicePixelRatio || 1;
-    var W = canvas.clientWidth || 300;
-    var H = canvas.clientHeight || 280;
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, W, H);
+  // --- WKT rendering (Y-up cartesian, with zoom & pan) --------------------
+  // The view maps world (WKT) coords to CSS pixels:
+  //   screenX = x * view.s + view.tx
+  //   screenY = -y * view.s + view.ty   (Y-up: larger Y is higher on screen)
+  var MIN_SCALE = 1e-4;
+  var MAX_SCALE = 1e6;
+  var state = { geoms: [], bounds: null, view: null, userZoomed: false };
 
-    var minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity,
-      verts = 0;
+  function computeBounds(geoms) {
+    var b = {
+      minX: Infinity,
+      minY: Infinity,
+      maxX: -Infinity,
+      maxY: -Infinity,
+      verts: 0,
+    };
     geoms.forEach(function (g) {
       g.rings.forEach(function (ring) {
-        verts += ring.length;
+        b.verts += ring.length;
         ring.forEach(function (p) {
-          if (p[0] < minX) minX = p[0];
-          if (p[1] < minY) minY = p[1];
-          if (p[0] > maxX) maxX = p[0];
-          if (p[1] > maxY) maxY = p[1];
+          if (p[0] < b.minX) b.minX = p[0];
+          if (p[1] < b.minY) b.minY = p[1];
+          if (p[0] > b.maxX) b.maxX = p[0];
+          if (p[1] > b.maxY) b.maxY = p[1];
         });
       });
     });
+    return isFinite(b.minX) ? b : null;
+  }
 
-    stat.textContent =
-      geoms.length + ' geom · ' + verts + ' vertices';
+  function canvasSize() {
+    return {
+      W: canvas.clientWidth || 300,
+      H: canvas.clientHeight || 300,
+      dpr: window.devicePixelRatio || 1,
+    };
+  }
 
-    if (!isFinite(minX)) return;
-
+  function fitView(bounds, W, H) {
     var pad = 18;
-    var bw = Math.max(maxX - minX, 1e-6);
-    var bh = Math.max(maxY - minY, 1e-6);
-    var scale = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
-    var ox = (W - bw * scale) / 2;
-    var oy = (H - bh * scale) / 2;
-    var tx = function (x) {
-      return ox + (x - minX) * scale;
-    };
-    // Render Y-up: larger Y maps higher on screen (WKT/geographic convention).
-    var ty = function (y) {
-      return H - oy - (y - minY) * scale;
-    };
+    var bw = Math.max(bounds.maxX - bounds.minX, 1e-6);
+    var bh = Math.max(bounds.maxY - bounds.minY, 1e-6);
+    var s = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
+    var cx = (bounds.minX + bounds.maxX) / 2;
+    var cy = (bounds.minY + bounds.maxY) / 2;
+    return { s: s, tx: W / 2 - cx * s, ty: H / 2 + cy * s };
+  }
 
+  function draw() {
+    var size = canvasSize();
+    var W = size.W,
+      H = size.H,
+      dpr = size.dpr;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    var v = state.view;
+    if (!v) return;
+    var sx = function (x) {
+      return x * v.s + v.tx;
+    };
+    var sy = function (y) {
+      return -y * v.s + v.ty;
+    };
     function trace(ring) {
       ring.forEach(function (p, i) {
-        var X = tx(p[0]),
-          Y = ty(p[1]);
-        if (i) ctx.lineTo(X, Y);
-        else ctx.moveTo(X, Y);
+        if (i) ctx.lineTo(sx(p[0]), sy(p[1]));
+        else ctx.moveTo(sx(p[0]), sy(p[1]));
       });
     }
 
@@ -152,7 +170,7 @@
     var LINE = style.getPropertyValue('--line').trim() || '#10b981';
     var POINT = style.getPropertyValue('--point').trim() || '#f59e0b';
 
-    geoms.forEach(function (g) {
+    state.geoms.forEach(function (g) {
       if (g.type === 'POLYGON') {
         ctx.beginPath();
         g.rings.forEach(function (ring) {
@@ -173,19 +191,19 @@
       } else if (g.type === 'POINT' && g.rings[0][0]) {
         var p = g.rings[0][0];
         ctx.beginPath();
-        ctx.arc(tx(p[0]), ty(p[1]), 3, 0, Math.PI * 2);
+        ctx.arc(sx(p[0]), sy(p[1]), 3, 0, Math.PI * 2);
         ctx.fillStyle = POINT;
         ctx.fill();
       }
     });
 
-    if (showPoints) {
+    if ($('showPoints').checked) {
       ctx.fillStyle = POINT;
-      geoms.forEach(function (g) {
+      state.geoms.forEach(function (g) {
         g.rings.forEach(function (ring) {
           ring.forEach(function (p) {
             ctx.beginPath();
-            ctx.arc(tx(p[0]), ty(p[1]), 1.7, 0, Math.PI * 2);
+            ctx.arc(sx(p[0]), sy(p[1]), 1.7, 0, Math.PI * 2);
             ctx.fill();
           });
         });
@@ -193,15 +211,33 @@
     }
   }
 
+  function setData(geoms) {
+    state.geoms = geoms;
+    state.bounds = computeBounds(geoms);
+    stat.textContent =
+      geoms.length + ' geom · ' + (state.bounds ? state.bounds.verts : 0) + ' vertices';
+    if (state.bounds && (!state.view || !state.userZoomed)) {
+      var size = canvasSize();
+      state.view = fitView(state.bounds, size.W, size.H);
+    }
+    draw();
+  }
+
+  function resetView() {
+    state.userZoomed = false;
+    if (state.bounds) {
+      var size = canvasSize();
+      state.view = fitView(state.bounds, size.W, size.H);
+    }
+    draw();
+  }
+
   // --- main update --------------------------------------------------------
   function update() {
     var src = svgIn.value;
 
     // Live SVG preview (sanitize away scripts; this is the user's own file).
-    svgPreview.innerHTML = src.replace(
-      /<script[\s\S]*?<\/script>/gi,
-      '',
-    );
+    svgPreview.innerHTML = src.replace(/<script[\s\S]*?<\/script>/gi, '');
 
     if (!svgToWkt) {
       wktOut.value = 'Error: svg2wkt failed to load (svg2wkt.js missing?).';
@@ -211,7 +247,7 @@
     try {
       var wkt = svgToWkt(src, options());
       wktOut.value = wkt;
-      renderWkt(parseWkt(wkt), $('showPoints').checked);
+      setData(parseWkt(wkt));
     } catch (e) {
       wktOut.value = 'Error: ' + (e && e.message ? e.message : e);
     }
@@ -223,18 +259,79 @@
     var reader = new FileReader();
     reader.onload = function () {
       svgIn.value = String(reader.result);
+      state.userZoomed = false; // fit the freshly loaded geometry
       update();
     };
     reader.readAsText(file);
   }
 
-  // --- wiring -------------------------------------------------------------
-  ['flipY', 'applyViewBox', 'density', 'precision', 'showPoints'].forEach(
-    function (id) {
-      $(id).addEventListener('input', update);
-      $(id).addEventListener('change', update);
+  // --- zoom & pan on the WKT canvas --------------------------------------
+  function localPoint(e) {
+    var r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  canvas.addEventListener(
+    'wheel',
+    function (e) {
+      e.preventDefault();
+      if (!state.view) return;
+      var v = state.view;
+      var p = localPoint(e);
+      var factor = Math.pow(1.0015, -e.deltaY);
+      var s2 = Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.s * factor));
+      // Keep the world point under the cursor fixed while zooming.
+      var wx = (p.x - v.tx) / v.s;
+      var wy = (v.ty - p.y) / v.s;
+      v.s = s2;
+      v.tx = p.x - wx * s2;
+      v.ty = p.y + wy * s2;
+      state.userZoomed = true;
+      draw();
     },
+    { passive: false },
   );
+
+  var dragging = false;
+  var lastX = 0;
+  var lastY = 0;
+  canvas.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    canvas.classList.add('panning');
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!dragging || !state.view) return;
+    state.view.tx += e.clientX - lastX;
+    state.view.ty += e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    state.userZoomed = true;
+    draw();
+  });
+  function endPan(e) {
+    dragging = false;
+    canvas.classList.remove('panning');
+    if (canvas.releasePointerCapture && e.pointerId != null) {
+      try {
+        canvas.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+    }
+  }
+  canvas.addEventListener('pointerup', endPan);
+  canvas.addEventListener('pointercancel', endPan);
+  canvas.addEventListener('dblclick', resetView);
+  $('resetViewBtn').addEventListener('click', resetView);
+
+  // --- wiring -------------------------------------------------------------
+  ['flipY', 'applyViewBox', 'density', 'precision'].forEach(function (id) {
+    $(id).addEventListener('input', update);
+    $(id).addEventListener('change', update);
+  });
+  // Toggling point visibility is a pure redraw — no need to reconvert or refit.
+  $('showPoints').addEventListener('change', draw);
   svgIn.addEventListener('input', update);
 
   $('loadBtn').addEventListener('click', function () {
@@ -245,6 +342,7 @@
   });
   $('resetBtn').addEventListener('click', function () {
     svgIn.value = DEFAULT_SVG;
+    state.userZoomed = false; // refit the new (default) geometry
     update();
   });
   $('copyBtn').addEventListener('click', function () {
@@ -296,16 +394,23 @@
       var text = dt.getData('text');
       if (text) {
         svgIn.value = text;
+        state.userZoomed = false;
         update();
       }
     }
   });
 
-  // Re-fit the canvas when the window resizes.
+  // Keep the canvas mapping correct on resize: refit if untouched, else redraw.
   var resizeTimer;
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(update, 120);
+    resizeTimer = setTimeout(function () {
+      if (state.bounds && !state.userZoomed) {
+        var size = canvasSize();
+        state.view = fitView(state.bounds, size.W, size.H);
+      }
+      draw();
+    }, 120);
   });
 
   // --- init ---------------------------------------------------------------
