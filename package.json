@@ -1,0 +1,53 @@
+{
+  "name": "svg2wkt",
+  "version": "0.1.0",
+  "description": "Convert an SVG string into a WKT (Well-Known Text) geometry string. Zero dependencies, TypeScript, ESM + CJS + UMD.",
+  "keywords": [
+    "svg",
+    "wkt",
+    "well-known-text",
+    "geometry",
+    "gis",
+    "geojson",
+    "convert",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "darkpotatochip@gmail.com",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "unpkg": "./dist/umd/svg2wkt.js",
+  "jsdelivr": "./dist/umd/svg2wkt.js",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/fixup-cjs.mjs",
+    "build:umd": "node scripts/build-umd.mjs",
+    "build:demo": "node scripts/build-demo.mjs",
+    "build": "npm run clean && npm run build:esm && npm run build:cjs && npm run build:umd && npm run build:demo",
+    "test": "npm run build && node --test",
+    "prepublishOnly": "npm test",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
